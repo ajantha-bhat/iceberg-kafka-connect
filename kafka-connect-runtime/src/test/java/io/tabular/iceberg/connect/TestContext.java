@@ -31,8 +31,8 @@ import org.apache.iceberg.CatalogProperties;
 import org.apache.iceberg.aws.AwsClientProperties;
 import org.apache.iceberg.aws.s3.S3FileIO;
 import org.apache.iceberg.aws.s3.S3FileIOProperties;
+import org.apache.iceberg.nessie.NessieCatalog;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableMap;
-import org.apache.iceberg.rest.RESTCatalog;
 import org.apache.kafka.clients.admin.Admin;
 import org.apache.kafka.clients.admin.AdminClientConfig;
 import org.apache.kafka.clients.producer.KafkaProducer;
@@ -57,7 +57,7 @@ public class TestContext {
   private final Network network;
   private final KafkaContainer kafka;
   private final KafkaConnectContainer kafkaConnect;
-  private final GenericContainer restCatalog;
+  private final GenericContainer nessie;
   private final GenericContainer minio;
 
   private static final String LOCAL_INSTALL_DIR = "build/install";
@@ -66,7 +66,7 @@ public class TestContext {
   private static final String MINIO_IMAGE = "minio/minio";
   private static final String KAFKA_IMAGE = "confluentinc/cp-kafka:7.4.1";
   private static final String CONNECT_IMAGE = "confluentinc/cp-kafka-connect:7.4.1";
-  private static final String REST_CATALOG_IMAGE = "tabulario/iceberg-rest:0.6.0";
+  private static final String NESSIE_CATALOG_IMAGE = "projectnessie/nessie:0.59.0";
 
   private TestContext() {
     network = Network.newNetwork();
@@ -79,12 +79,14 @@ public class TestContext {
             .withCommand("server /data")
             .waitingFor(new HttpWaitStrategy().forPort(9000).forPath("/minio/health/ready"));
 
-    restCatalog =
-        new GenericContainer<>(DockerImageName.parse(REST_CATALOG_IMAGE))
+    nessie =
+        new GenericContainer<>(DockerImageName.parse(NESSIE_CATALOG_IMAGE))
             .withNetwork(network)
             .withNetworkAliases("iceberg")
             .dependsOn(minio)
-            .withExposedPorts(8181)
+            .withExposedPorts(19121)
+            .withEnv("QUARKUS_HTTP_PORT", "19121")
+            .withEnv("NESSIE_VERSION_STORE_TYPE", "INMEMORY")
             .withEnv("CATALOG_WAREHOUSE", "s3://" + BUCKET + "/warehouse")
             .withEnv("CATALOG_IO__IMPL", S3FileIO.class.getName())
             .withEnv("CATALOG_S3_ENDPOINT", "http://minio:9000")
@@ -98,13 +100,13 @@ public class TestContext {
     kafkaConnect =
         new KafkaConnectContainer(DockerImageName.parse(CONNECT_IMAGE))
             .withNetwork(network)
-            .dependsOn(restCatalog, kafka)
+            .dependsOn(nessie, kafka)
             .withFileSystemBind(LOCAL_INSTALL_DIR, KC_PLUGIN_DIR)
             .withEnv("CONNECT_PLUGIN_PATH", KC_PLUGIN_DIR)
             .withEnv("CONNECT_BOOTSTRAP_SERVERS", kafka.getNetworkAliases().get(0) + ":9092")
             .withEnv("CONNECT_OFFSET_FLUSH_INTERVAL_MS", "500");
 
-    Startables.deepStart(Stream.of(minio, restCatalog, kafka, kafkaConnect)).join();
+    Startables.deepStart(Stream.of(minio, nessie, kafka, kafkaConnect)).join();
 
     try (S3Client s3 = initLocalS3Client()) {
       s3.createBucket(req -> req.bucket(BUCKET));
@@ -116,7 +118,7 @@ public class TestContext {
   private void shutdown() {
     kafkaConnect.close();
     kafka.close();
-    restCatalog.close();
+    nessie.close();
     minio.close();
     network.close();
   }
@@ -126,7 +128,7 @@ public class TestContext {
   }
 
   private int getLocalCatalogPort() {
-    return restCatalog.getMappedPort(8181);
+    return nessie.getMappedPort(19121);
   }
 
   private String getLocalBootstrapServers() {
@@ -157,13 +159,14 @@ public class TestContext {
     }
   }
 
-  public RESTCatalog initLocalCatalog() {
-    String localCatalogUri = "http://localhost:" + getLocalCatalogPort();
-    RESTCatalog result = new RESTCatalog();
+  public NessieCatalog initLocalCatalog() {
+    String localCatalogUri = "http://localhost:" + getLocalCatalogPort() + "/api/v1";
+    NessieCatalog result = new NessieCatalog();
     result.initialize(
         "local",
         ImmutableMap.<String, String>builder()
             .put(CatalogProperties.URI, localCatalogUri)
+            .put(CatalogProperties.WAREHOUSE_LOCATION, "s3://" + BUCKET + "/warehouse")
             .put(CatalogProperties.FILE_IO_IMPL, S3FileIO.class.getName())
             .put(S3FileIOProperties.ENDPOINT, "http://localhost:" + getLocalMinioPort())
             .put(S3FileIOProperties.ACCESS_KEY_ID, AWS_ACCESS_KEY)

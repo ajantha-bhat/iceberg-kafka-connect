@@ -21,6 +21,7 @@ package io.tabular.iceberg.connect;
 import static io.tabular.iceberg.connect.TestConstants.AWS_ACCESS_KEY;
 import static io.tabular.iceberg.connect.TestConstants.AWS_REGION;
 import static io.tabular.iceberg.connect.TestConstants.AWS_SECRET_KEY;
+import static io.tabular.iceberg.connect.TestConstants.BUCKET;
 import static java.lang.String.format;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -29,12 +30,12 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import org.apache.iceberg.CatalogProperties;
-import org.apache.iceberg.CatalogUtil;
 import org.apache.iceberg.DataFile;
 import org.apache.iceberg.PartitionSpec;
 import org.apache.iceberg.Schema;
 import org.apache.iceberg.Table;
 import org.apache.iceberg.aws.AwsClientProperties;
+import org.apache.iceberg.aws.s3.S3FileIO;
 import org.apache.iceberg.aws.s3.S3FileIOProperties;
 import org.apache.iceberg.catalog.Namespace;
 import org.apache.iceberg.catalog.TableIdentifier;
@@ -103,10 +104,12 @@ public class IntegrationMultiTableTest extends IntegrationTestBase {
             .config(format("iceberg.table.%s.%s.routeRegex", TEST_DB, TEST_TABLE2), "type2")
             .config("iceberg.control.commitIntervalMs", 1000)
             .config("iceberg.control.commitTimeoutMs", Integer.MAX_VALUE)
+            .config("iceberg.catalog.catalog-impl", "org.apache.iceberg.nessie.NessieCatalog")
+            .config("iceberg.catalog." + CatalogProperties.URI, "http://iceberg:19121/api/v1")
             .config(
-                "iceberg.catalog." + CatalogUtil.ICEBERG_CATALOG_TYPE,
-                CatalogUtil.ICEBERG_CATALOG_TYPE_REST)
-            .config("iceberg.catalog." + CatalogProperties.URI, "http://iceberg:8181")
+                "iceberg.catalog." + CatalogProperties.WAREHOUSE_LOCATION,
+                "s3://" + BUCKET + "/warehouse")
+            .config("iceberg.catalog." + CatalogProperties.FILE_IO_IMPL, S3FileIO.class.getName())
             .config("iceberg.catalog." + S3FileIOProperties.ENDPOINT, "http://minio:9000")
             .config("iceberg.catalog." + S3FileIOProperties.ACCESS_KEY_ID, AWS_ACCESS_KEY)
             .config("iceberg.catalog." + S3FileIOProperties.SECRET_ACCESS_KEY, AWS_SECRET_KEY)
