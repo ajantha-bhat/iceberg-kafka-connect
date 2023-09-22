@@ -40,6 +40,7 @@ import org.apache.iceberg.Table;
 import org.apache.iceberg.aws.AwsClientProperties;
 import org.apache.iceberg.aws.s3.S3FileIOProperties;
 import org.apache.iceberg.catalog.Namespace;
+import org.apache.iceberg.catalog.SupportsNamespaces;
 import org.apache.iceberg.catalog.TableIdentifier;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableList;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableMap;
@@ -51,7 +52,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-public class IntegrationCdcTest extends IntegrationTestBase {
+public abstract class AbstractIntegrationCdcTest extends IntegrationTestBase {
 
   private static final String CONNECTOR_NAME = "test_connector-" + UUID.randomUUID();
   private static final String TEST_TOPIC = "test-topic-" + UUID.randomUUID();
@@ -77,7 +78,7 @@ public class IntegrationCdcTest extends IntegrationTestBase {
   @BeforeEach
   public void setup() {
     createTopic(TEST_TOPIC, TEST_TOPIC_PARTITIONS);
-    catalog.createNamespace(Namespace.of(TEST_DB));
+    ((SupportsNamespaces) catalog).createNamespace(Namespace.of(TEST_DB));
   }
 
   @AfterEach
@@ -85,7 +86,7 @@ public class IntegrationCdcTest extends IntegrationTestBase {
     context.stopConnector(CONNECTOR_NAME);
     deleteTopic(TEST_TOPIC);
     catalog.dropTable(TableIdentifier.of(TEST_DB, TEST_TABLE));
-    catalog.dropNamespace(Namespace.of(TEST_DB));
+    ((SupportsNamespaces) catalog).dropNamespace(Namespace.of(TEST_DB));
   }
 
   @Test

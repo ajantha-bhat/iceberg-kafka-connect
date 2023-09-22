@@ -37,6 +37,7 @@ import org.apache.iceberg.Table;
 import org.apache.iceberg.aws.AwsClientProperties;
 import org.apache.iceberg.aws.s3.S3FileIOProperties;
 import org.apache.iceberg.catalog.Namespace;
+import org.apache.iceberg.catalog.SupportsNamespaces;
 import org.apache.iceberg.catalog.TableIdentifier;
 import org.apache.iceberg.relocated.com.google.common.collect.Lists;
 import org.apache.iceberg.types.Types;
@@ -45,14 +46,14 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-public class IntegrationMultiTableTest extends IntegrationTestBase {
+public abstract class AbstractIntegrationDynamicTableTest extends IntegrationTestBase {
 
   private static final String CONNECTOR_NAME = "test_connector-" + UUID.randomUUID();
   private static final String TEST_TOPIC = "test-topic-" + UUID.randomUUID();
   private static final int TEST_TOPIC_PARTITIONS = 2;
   private static final String TEST_DB = "test";
-  private static final String TEST_TABLE1 = "foobar1";
-  private static final String TEST_TABLE2 = "foobar2";
+  private static final String TEST_TABLE1 = "tbl1";
+  private static final String TEST_TABLE2 = "tbl2";
   private static final TableIdentifier TABLE_IDENTIFIER1 = TableIdentifier.of(TEST_DB, TEST_TABLE1);
   private static final TableIdentifier TABLE_IDENTIFIER2 = TableIdentifier.of(TEST_DB, TEST_TABLE2);
   private static final Schema TEST_SCHEMA =
@@ -70,7 +71,7 @@ public class IntegrationMultiTableTest extends IntegrationTestBase {
   @BeforeEach
   public void setup() {
     createTopic(TEST_TOPIC, TEST_TOPIC_PARTITIONS);
-    catalog.createNamespace(Namespace.of(TEST_DB));
+    ((SupportsNamespaces) catalog).createNamespace(Namespace.of(TEST_DB));
   }
 
   @AfterEach
@@ -79,7 +80,7 @@ public class IntegrationMultiTableTest extends IntegrationTestBase {
     deleteTopic(TEST_TOPIC);
     catalog.dropTable(TableIdentifier.of(TEST_DB, TEST_TABLE1));
     catalog.dropTable(TableIdentifier.of(TEST_DB, TEST_TABLE2));
-    catalog.dropNamespace(Namespace.of(TEST_DB));
+    ((SupportsNamespaces) catalog).dropNamespace(Namespace.of(TEST_DB));
   }
 
   @Test
@@ -95,12 +96,8 @@ public class IntegrationMultiTableTest extends IntegrationTestBase {
             .config("key.converter.schemas.enable", false)
             .config("value.converter", "org.apache.kafka.connect.json.JsonConverter")
             .config("value.converter.schemas.enable", false)
-            .config(
-                "iceberg.tables",
-                format("%s.%s, %s.%s", TEST_DB, TEST_TABLE1, TEST_DB, TEST_TABLE2))
-            .config("iceberg.tables.routeField", "type")
-            .config(format("iceberg.table.%s.%s.routeRegex", TEST_DB, TEST_TABLE1), "type1")
-            .config(format("iceberg.table.%s.%s.routeRegex", TEST_DB, TEST_TABLE2), "type2")
+            .config("iceberg.tables.dynamic.enabled", true)
+            .config("iceberg.tables.routeField", "payload")
             .config("iceberg.control.commitIntervalMs", 1000)
             .config("iceberg.control.commitTimeoutMs", Integer.MAX_VALUE)
             .config(
@@ -134,9 +131,12 @@ public class IntegrationMultiTableTest extends IntegrationTestBase {
   }
 
   private void runTest() {
-    String event1 = format(RECORD_FORMAT, 1, "type1", System.currentTimeMillis(), "hello world!");
-    String event2 = format(RECORD_FORMAT, 2, "type2", System.currentTimeMillis(), "having fun?");
-    String event3 = format(RECORD_FORMAT, 3, "type3", System.currentTimeMillis(), "ignore me");
+    String event1 =
+        format(RECORD_FORMAT, 1, "type1", System.currentTimeMillis(), TEST_DB + "." + TEST_TABLE1);
+    String event2 =
+        format(RECORD_FORMAT, 2, "type2", System.currentTimeMillis(), TEST_DB + "." + TEST_TABLE2);
+    String event3 =
+        format(RECORD_FORMAT, 3, "type3", System.currentTimeMillis(), TEST_DB + ".tbl3");
 
     send(TEST_TOPIC, TEST_TOPIC_PARTITIONS, event1);
     send(TEST_TOPIC, TEST_TOPIC_PARTITIONS, event2);

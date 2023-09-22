@@ -30,6 +30,7 @@ import java.util.stream.Stream;
 import org.apache.iceberg.CatalogProperties;
 import org.apache.iceberg.aws.s3.S3FileIO;
 import org.apache.iceberg.aws.s3.S3FileIOProperties;
+import org.apache.iceberg.catalog.Catalog;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableMap;
 import org.apache.iceberg.rest.RESTCatalog;
 import org.apache.kafka.clients.admin.Admin;
@@ -50,15 +51,12 @@ import software.amazon.awssdk.services.s3.S3Client;
 
 @SuppressWarnings("rawtypes")
 public class TestContext {
-
-  public static TestContext INSTANCE = new TestContext();
-
+  private final CatalogType catalogType;
   private final Network network;
   private final KafkaContainer kafka;
   private final KafkaConnectContainer kafkaConnect;
-  private final GenericContainer restCatalog;
+  private final GenericContainer catalog;
   private final GenericContainer minio;
-
   private static final String LOCAL_INSTALL_DIR = "build/install";
   private static final String KC_PLUGIN_DIR = "/test/kafka-connect";
 
@@ -67,7 +65,8 @@ public class TestContext {
   private static final String CONNECT_IMAGE = "confluentinc/cp-kafka-connect:7.4.1";
   private static final String REST_CATALOG_IMAGE = "tabulario/iceberg-rest:0.6.0";
 
-  private TestContext() {
+  public TestContext(CatalogType type) {
+    catalogType = type;
     network = Network.newNetwork();
 
     minio =
@@ -78,32 +77,20 @@ public class TestContext {
             .withCommand("server /data")
             .waitingFor(new HttpWaitStrategy().forPort(9000).forPath("/minio/health/ready"));
 
-    restCatalog =
-        new GenericContainer<>(DockerImageName.parse(REST_CATALOG_IMAGE))
-            .withNetwork(network)
-            .withNetworkAliases("iceberg")
-            .dependsOn(minio)
-            .withExposedPorts(8181)
-            .withEnv("CATALOG_WAREHOUSE", "s3://" + BUCKET + "/warehouse")
-            .withEnv("CATALOG_IO__IMPL", S3FileIO.class.getName())
-            .withEnv("CATALOG_S3_ENDPOINT", "http://minio:9000")
-            .withEnv("CATALOG_S3_ACCESS__KEY__ID", AWS_ACCESS_KEY)
-            .withEnv("CATALOG_S3_SECRET__ACCESS__KEY", AWS_SECRET_KEY)
-            .withEnv("CATALOG_S3_PATH__STYLE__ACCESS", "true")
-            .withEnv("AWS_REGION", AWS_REGION);
+    catalog = initCatalogContainer();
 
     kafka = new KafkaContainer(DockerImageName.parse(KAFKA_IMAGE)).withNetwork(network);
 
     kafkaConnect =
         new KafkaConnectContainer(DockerImageName.parse(CONNECT_IMAGE))
             .withNetwork(network)
-            .dependsOn(restCatalog, kafka)
+            .dependsOn(catalog, kafka)
             .withFileSystemBind(LOCAL_INSTALL_DIR, KC_PLUGIN_DIR)
             .withEnv("CONNECT_PLUGIN_PATH", KC_PLUGIN_DIR)
             .withEnv("CONNECT_BOOTSTRAP_SERVERS", kafka.getNetworkAliases().get(0) + ":9092")
             .withEnv("CONNECT_OFFSET_FLUSH_INTERVAL_MS", "500");
 
-    Startables.deepStart(Stream.of(minio, restCatalog, kafka, kafkaConnect)).join();
+    Startables.deepStart(Stream.of(minio, catalog, kafka, kafkaConnect)).join();
 
     try (S3Client s3 = initLocalS3Client()) {
       s3.createBucket(req -> req.bucket(BUCKET));
@@ -112,10 +99,32 @@ public class TestContext {
     Runtime.getRuntime().addShutdownHook(new Thread(this::shutdown));
   }
 
+  private GenericContainer initCatalogContainer() {
+    if (catalogType == CatalogType.REST) {
+      return restCatalog();
+    }
+    return null;
+  }
+
+  private GenericContainer restCatalog() {
+    return new GenericContainer<>(DockerImageName.parse(REST_CATALOG_IMAGE))
+        .withNetwork(network)
+        .withNetworkAliases("iceberg")
+        .dependsOn(minio)
+        .withExposedPorts(8181)
+        .withEnv("CATALOG_WAREHOUSE", "s3://" + BUCKET + "/warehouse")
+        .withEnv("CATALOG_IO__IMPL", S3FileIO.class.getName())
+        .withEnv("CATALOG_S3_ENDPOINT", "http://minio:9000")
+        .withEnv("CATALOG_S3_ACCESS__KEY__ID", AWS_ACCESS_KEY)
+        .withEnv("CATALOG_S3_SECRET__ACCESS__KEY", AWS_SECRET_KEY)
+        .withEnv("CATALOG_S3_PATH__STYLE__ACCESS", "true")
+        .withEnv("AWS_REGION", AWS_REGION);
+  }
+
   private void shutdown() {
     kafkaConnect.close();
     kafka.close();
-    restCatalog.close();
+    catalog.close();
     minio.close();
     network.close();
   }
@@ -124,8 +133,8 @@ public class TestContext {
     return minio.getMappedPort(9000);
   }
 
-  private int getLocalCatalogPort() {
-    return restCatalog.getMappedPort(8181);
+  private int getLocalRestCatalogPort() {
+    return catalog.getMappedPort(8181);
   }
 
   private String getLocalBootstrapServers() {
@@ -156,8 +165,15 @@ public class TestContext {
     }
   }
 
-  public RESTCatalog initLocalCatalog() {
-    String localCatalogUri = "http://localhost:" + getLocalCatalogPort();
+  public Catalog initCatalog() {
+    if (catalogType == CatalogType.REST) {
+      return initLocalRestCatalog();
+    }
+    return null;
+  }
+
+  private RESTCatalog initLocalRestCatalog() {
+    String localCatalogUri = "http://localhost:" + getLocalRestCatalogPort();
     RESTCatalog result = new RESTCatalog();
     result.initialize(
         "local",
@@ -186,5 +202,9 @@ public class TestContext {
   public Admin initLocalAdmin() {
     return Admin.create(
         ImmutableMap.of(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, getLocalBootstrapServers()));
+  }
+
+  public enum CatalogType {
+    REST,
   }
 }

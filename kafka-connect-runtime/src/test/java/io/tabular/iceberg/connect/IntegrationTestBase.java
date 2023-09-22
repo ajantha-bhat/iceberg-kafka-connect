@@ -20,15 +20,14 @@ package io.tabular.iceberg.connect;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import java.io.IOException;
 import java.util.Map;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
+import org.apache.iceberg.catalog.Catalog;
 import org.apache.iceberg.catalog.TableIdentifier;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableList;
-import org.apache.iceberg.rest.RESTCatalog;
 import org.apache.kafka.clients.admin.Admin;
 import org.apache.kafka.clients.admin.NewTopic;
 import org.apache.kafka.clients.producer.KafkaProducer;
@@ -38,21 +37,22 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import software.amazon.awssdk.services.s3.S3Client;
 
-public class IntegrationTestBase {
-
-  protected final TestContext context = TestContext.INSTANCE;
+public abstract class IntegrationTestBase {
+  protected final TestContext context = new TestContext(catalogType());
   protected final AtomicInteger cnt = new AtomicInteger(0);
 
   protected S3Client s3;
-  protected RESTCatalog catalog;
+  protected Catalog catalog;
   protected Admin admin;
 
   private KafkaProducer<String, String> producer;
 
+  protected abstract TestContext.CatalogType catalogType();
+
   @BeforeEach
   public void baseSetup() {
     s3 = context.initLocalS3Client();
-    catalog = context.initLocalCatalog();
+    catalog = context.initCatalog();
     producer = context.initLocalProducer();
     admin = context.initLocalAdmin();
   }
@@ -60,9 +60,11 @@ public class IntegrationTestBase {
   @AfterEach
   public void baseTeardown() {
     try {
-      catalog.close();
-    } catch (IOException e) {
-      // NO-OP
+      if (catalog instanceof AutoCloseable) {
+        ((AutoCloseable) catalog).close();
+      }
+    } catch (Exception e) {
+      throw new RuntimeException(e);
     }
     producer.close();
     admin.close();
